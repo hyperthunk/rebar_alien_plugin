@@ -115,6 +115,12 @@ cleanup(Existing, Dir, Config) ->
 
 apply_config(_, _Dir, []) ->
     ok;
+apply_config(install, Dir, [{rule, Rule, Instruction}|Rest]) ->
+    Valid = case check(Dir, Rule) of
+        true -> Rest;
+        false -> [Instruction|Rest]
+    end,
+    apply_config(install, Dir, Valid);
 apply_config(install, Dir, [Conf|Rest]) ->
     ?DEBUG("Processing instruction [~p]~n", [Conf]),
     case Conf of
@@ -125,7 +131,13 @@ apply_config(install, Dir, [Conf|Rest]) ->
         {mkdir, Dest} ->
             rebar_utils:ensure_dir(filename:join(Dir, Dest));
         {exec, Cmd} ->
-            rebar_utils:sh(Cmd, [{cd, Dir}])
+            case rebar_utils:sh(Cmd, [return_on_error, {cd, Dir}]) of
+                {error, {Rc, Err}} ->
+                    rebar_log:log(warn, "Command '~s' failed with ~p: ~s~n", 
+                                 [Cmd, Rc, Err]),
+                    ok;
+                _ -> ok
+            end
     end,
     apply_config(install, Dir, Rest);
 apply_config(uninstall, Dir, [Conf|Rest]) ->
@@ -136,10 +148,23 @@ apply_config(uninstall, Dir, [Conf|Rest]) ->
         {copy, _, Dest} ->
             rebar_file_utils:rm_rf(filename:join(Dir, Dest));
         {mkdir, Dest} ->
-            rebar_utils:rm_rf(filename:join(Dir, Dest))
+            rebar_utils:rm_rf(filename:join(Dir, Dest));
+        {rule, Rule, _} ->
+            [ rebar_utils:rm_rf(Match) || Match <- match_rule(Dir, Rule) ]
     end,
     apply_config(uninstall, Dir, Rest).
 
+check(Dir, Rule) ->
+    length(match_rule(Dir, Rule)) > 0.
+
+match_rule(Dir, Rule) ->
+    rebar_log:log(debug, "Checking rule '~s' ...~n", [Rule]),
+    FileList = case filelib:wildcard(filename:join(Dir, Rule)) of
+        [] -> rebar_utils:find_files(Dir, Rule, true);
+        Found when is_list(Found) -> Found
+    end,
+    rebar_log:log(debug, "Exists: ~p!~n", [FileList]),
+    FileList.
 
 generate_app_file(Dir, RootAppName) ->
     Name = filename:basename(Dir),
