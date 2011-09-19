@@ -17,8 +17,8 @@ be processed, either using the `sub_dirs` option or in `deps`.
 
 The plugin looks in your `rebar.config` for a list of sub-directories to process,
 under the `alien_dirs` configuration element. For each of these directories, the
-plugin will ensure that a valid OTP application file (e.g., a template in the
-`src/<project>.app.src`) file is created if it does not already exist.
+plugin will ensure that a valid OTP application file (i.e., a template in the
+`src/<project>.app.src`) is created if it does not already exist.
 
 Secondly, the plugin will look in your `rebar.config` for any additional build
 instructions in the `alien_conf` element. These instructions must take one of the
