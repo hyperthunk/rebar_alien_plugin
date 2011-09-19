@@ -26,16 +26,23 @@
 
 -export([clean/2, preprocess/2]).
 
+%%
+%% Plugin API
+%%
+
 clean(Config, _AppFile) ->
     case rebar_config:get_local(Config, alien_dirs, []) of
         [] -> ok;
         AlienDirs ->
+            Conf = rebar_config:get_local(Config, alien_conf, []),
             ?DEBUG("Checking Alien Dir '~s' for OTP app file(s)~n", [AlienDirs]),
             lists:foldl(fun(Dir, Acc) ->
                             case rebar_app_utils:is_app_dir(Dir) of
                                 {true, Existing} ->
                                     case is_alien_dependency(Existing) of
-                                        true -> cleanup(Existing, Dir, Config);
+                                        true ->
+                                            cleanup(Existing, Dir,
+                                                proplists:get_value(Dir, Conf, []));
                                         false -> ok
                                     end;
                                 false ->
@@ -55,6 +62,10 @@ preprocess(Config, AppFile) ->
             {ok, [ filename:join(Cwd, Dir) ||
                 Dir <- process(AlienDirs, AppFile, Config) ]}
     end.
+
+%%
+%% Internal Functions
+%%
 
 is_alien_dependency(AppFile) ->
     case get_app_description(AppFile) of
@@ -110,8 +121,7 @@ apply_config(install, Dir, [Conf|Rest]) ->
         {create, Dest, Data} ->
             file:write_file(filename:join(Dir, Dest), Data, [write]);
         {copy, Src, Dest} ->
-            rebar_file_utils:cp_r([filename:join(Dir, Src)], 
-                                   filename:join(Src, Dest));
+            rebar_file_utils:cp_r([Src], filename:join(Dir, Dest));
         {mkdir, Dest} ->
             rebar_utils:ensure_dir(filename:join(Dir, Dest))
     end,
