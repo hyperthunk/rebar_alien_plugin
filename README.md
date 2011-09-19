@@ -24,6 +24,7 @@ following forms:
 1. `{copy, Src, Dest}` which copies `Src` to `Dest`
 2. `{create, Dest, Data}` which creates a file `Dest` with the contents `Data`
 3. `{mkdir, Dest}` which creates the specified directory
+4. `{exec, Cmd}` some arbitrary shell command to run in the directory
 
 These instructions allow you to generate, copy or otherwise insert your own custom
 rebar configuration into the target directory. The project skeleton in `examples`

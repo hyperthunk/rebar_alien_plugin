@@ -123,7 +123,9 @@ apply_config(install, Dir, [Conf|Rest]) ->
         {copy, Src, Dest} ->
             rebar_file_utils:cp_r([Src], filename:join(Dir, Dest));
         {mkdir, Dest} ->
-            rebar_utils:ensure_dir(filename:join(Dir, Dest))
+            rebar_utils:ensure_dir(filename:join(Dir, Dest));
+        {exec, Cmd} ->
+            rebar_utils:sh(Cmd, [{cd, Dir}])
     end,
     apply_config(install, Dir, Rest);
 apply_config(uninstall, Dir, [Conf|Rest]) ->
