@@ -12,9 +12,6 @@ If you pass `-v` you'll get more verbose output.
 
 ## How it works
 
-Naturally you will need to notify rebar of any *special* directories you wish to
-be processed, either using the `sub_dirs` option or in `deps`.
-
 The plugin looks in your `rebar.config` for a list of sub-directories to process,
 under the `alien_dirs` configuration element. For each of these directories, the
 plugin will ensure that a valid OTP application file (i.e., a template in the
@@ -65,14 +62,14 @@ use it in many projects. This can be done manually, or using a package manager:
 
 ## Usage
 
-Configure the dist plugin in your `rebar.config` as usual:
+Configure the plugin in your `rebar.config` like so:
 
 ```erlang
-{sub_dirs, ["inttest"]}.
+%% *alien_dirs get treated like local sub_dirs at runtime*
 {alien_dirs, ["inttest"]}.
 {alien_conf, [
     {"inttest", [
-        {create, "rebar.config", "{post_hooks, \\"mvn clean test\\"}"}
+        {create, "rebar.config", "{post_hooks, [{compile, \"mvn clean test\"}]}."}
     ]}
 ]}.
 ```
