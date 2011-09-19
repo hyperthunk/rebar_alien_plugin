@@ -1,8 +1,8 @@
 # Rebar Alien Plugin
 
-This plugin allows you to include *alien* sub_dirs and/or dependencies in a 
+This plugin allows you to include *alien* sub_dirs and/or dependencies in a
 project built by rebar. To see how this works, take a look at the `examples`
-directory, which contains a sub directory including a simple junit test and 
+directory, which contains a sub directory including a simple junit test and
 maven build. You can run the example (assuming you have java + maven installed
 on your system) by changing to the `examples` directory and typing:
 
@@ -34,11 +34,15 @@ uses this mechanism to push a set of custom `post_hooks` into the `inttest` fold
 which instruct rebar to run the `mvn clean test` command and execute the *alien*
 tests.
 
-Running `rebar clean` will undo any actions specified in `alien_conf` (i.e., it 
+Running `rebar clean` will undo any actions specified in `alien_conf` (i.e., it
 will delete any generated/copied files and folder) and remove any `rebar.config`
 that was generated in `src/<project>.app.src` on your behalf.
 
 ## Installation
+
+The *rebar_alien_plugin* requires a recent version rebar with support for plugins
+hooking into the `Module:preprocess/2` mechanism. At the time of writing, you will
+need to use [this branch](https://github.com/hyperthunk/rebar/tree/first-class-plugins).
 
 Include the following tuple in your rebar deps:
 
