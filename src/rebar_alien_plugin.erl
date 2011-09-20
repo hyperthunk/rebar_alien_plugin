@@ -24,33 +24,11 @@
 
 -define(DEBUG(Msg, Args), rebar_log:log(debug, Msg, Args)).
 
--export([clean/2, preprocess/2]).
+-export(['alien:clean'/2, clean/2, preprocess/2]).
 
 %%
 %% Plugin API
 %%
-
-clean(Config, _AppFile) ->
-    case rebar_config:get_local(Config, alien_dirs, []) of
-        [] -> ok;
-        AlienDirs ->
-            Conf = rebar_config:get_local(Config, alien_conf, []),
-            ?DEBUG("Checking Alien Dir '~s' for OTP app file(s)~n", [AlienDirs]),
-            lists:foldl(fun(Dir, Acc) ->
-                            case rebar_app_utils:is_app_dir(Dir) of
-                                {true, Existing} ->
-                                    case is_alien_dependency(Existing) of
-                                        true ->
-                                            cleanup(Existing, Dir,
-                                                proplists:get_value(Dir, Conf, []));
-                                        false -> ok
-                                    end;
-                                false ->
-                                    ok
-                            end,
-                            [Dir|Acc]
-                        end, [], AlienDirs), ok
-    end.
 
 preprocess(Config, AppFile) ->
     case rebar_config:get_local(Config, alien_dirs, []) of
@@ -63,9 +41,47 @@ preprocess(Config, AppFile) ->
                 Dir <- process(AlienDirs, AppFile, Config) ]}
     end.
 
+'alien:clean'(Config, _AppFile) ->
+    Clean = fun(Dir, Item) -> alien_conf_clean(Dir, Item) end,
+    [ rebar_file_utils:rm_rf(D) || D <- cleanup(Config, Clean) ],
+    ok.
+
+clean(Config, _AppFile) ->
+    Clean = fun(Dir, Item) ->
+        case lists:member(element(1, Item), [rule, command]) of
+            true -> ok;
+            false -> alien_conf_clean(Dir, Item)
+        end
+    end,
+    [ rebar_file_utils:rm_rf(D) || D <- cleanup(Config, Clean) ],
+    ok.
+
 %%
 %% Internal Functions
 %%
+
+cleanup(Config, Clean) ->
+    case rebar_config:get_local(Config, alien_dirs, []) of
+        [] -> ok;
+        AlienDirs ->
+            Conf = rebar_config:get_local(Config, alien_conf, []),
+            ?DEBUG("Checking Alien Dir '~s' for OTP app file(s)~n", [AlienDirs]),
+            DirClean = fun(Dir) ->
+                case rebar_app_utils:is_app_dir(Dir) of
+                    {true, Existing} ->
+                        case is_alien_dependency(Existing) of
+                            true ->
+                                Items = proplists:get_value(Dir, Conf, []),
+                                [ Clean(Dir, Item) || Item <- Items ],
+                                Existing;
+                            false -> ignored
+                        end;
+                    false ->
+                        ignored
+                end
+            end,
+            lists:map(DirClean, AlienDirs)
+    end.
 
 is_alien_dependency(AppFile) ->
     case get_app_description(AppFile) of
@@ -105,23 +121,19 @@ process(AlienDirs, AppFile, RebarConfig) ->
                             generate_app_file(Dir,
                                 rebar_app_utils:app_src_to_app(AppFile))
                     end,
-                    apply_config(install, Dir, proplists:get_value(Dir, Conf, [])),
+                    apply_config(Dir, proplists:get_value(Dir, Conf, [])),
                     [Dir|Acc]
                 end, [], AlienDirs).
 
-cleanup(Existing, Dir, Config) ->
-    rebar_file_utils:rm_rf(Existing),
-    apply_config(uninstall, Dir, Config).
-
-apply_config(_, _Dir, []) ->
+apply_config(_Dir, []) ->
     ok;
-apply_config(install, Dir, [{rule, Rule, Instruction}|Rest]) ->
+apply_config(Dir, [{rule, Rule, Instruction}|Rest]) ->
     Valid = case check(Dir, Rule) of
         true -> Rest;
         false -> [Instruction|Rest]
     end,
-    apply_config(install, Dir, Valid);
-apply_config(install, Dir, [Conf|Rest]) ->
+    apply_config(Dir, Valid);
+apply_config(Dir, [Conf|Rest]) ->
     ?DEBUG("Processing instruction [~p]~n", [Conf]),
     case Conf of
         {create, Dest, Data} ->
@@ -133,15 +145,15 @@ apply_config(install, Dir, [Conf|Rest]) ->
         {exec, Cmd} ->
             case rebar_utils:sh(Cmd, [return_on_error, {cd, Dir}]) of
                 {error, {Rc, Err}} ->
-                    rebar_log:log(warn, "Command '~s' failed with ~p: ~s~n", 
+                    rebar_log:log(warn, "Command '~s' failed with ~p: ~s~n",
                                  [Cmd, Rc, Err]),
                     ok;
                 _ -> ok
             end
     end,
-    apply_config(install, Dir, Rest);
-apply_config(uninstall, Dir, [Conf|Rest]) ->
-    ?DEBUG("Processing instruction [~p]~n", [Conf]),
+    apply_config(Dir, Rest).
+
+alien_conf_clean(Dir, Conf) ->
     case Conf of
         {create, Dest, _} ->
             rebar_file_utils:rm_rf(filename:join(Dir, Dest));
@@ -150,14 +162,25 @@ apply_config(uninstall, Dir, [Conf|Rest]) ->
         {mkdir, Dest} ->
             rebar_utils:rm_rf(filename:join(Dir, Dest));
         {rule, Rule, _} ->
-            [ rebar_utils:rm_rf(Match) || Match <- match_rule(Dir, Rule) ]
-    end,
-    apply_config(uninstall, Dir, Rest).
+            case Rule of
+                {Targets, _} ->
+                    [ rebar_utils:rm_rf(Match) || 
+                                            Match <- match_rule(Dir, Targets) ];
+                Target when is_list(Target) ->
+                    [ rebar_utils:rm_rf(Match) || 
+                                            Match <- match_rule(Dir, Target) ]
+            end
+    end.
 
 check(Dir, Rule) ->
     length(match_rule(Dir, Rule)) > 0.
 
-match_rule(Dir, Rule) ->
+match_rule(Dir, {Target, Deps}) ->
+    Xs = match_rule(Dir, Target),
+    Ys = match_rule(Dir, Deps),
+    [ X || X <- Xs, Y <- Ys, 
+           filelib:last_modified(X) < filelib:last_modified(Y) ];
+match_rule(Dir, Rule) when is_list(Rule) ->
     rebar_log:log(debug, "Checking rule '~s' ...~n", [Rule]),
     FileList = case filelib:wildcard(filename:join(Dir, Rule)) of
         [] -> rebar_utils:find_files(Dir, Rule, true);
