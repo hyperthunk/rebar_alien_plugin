@@ -31,14 +31,20 @@
 %%
 
 preprocess(Config, AppFile) ->
-    case rebar_config:get_local(Config, alien_dirs, []) of
-        [] ->
+    case is_pending_clean() of
+        true ->
+            %% Is this *really* true!?
             {ok, []};
-        AlienDirs ->
-            ?DEBUG("Processing Alien Dirs ~p~n", [AlienDirs]),
-            Cwd = rebar_utils:get_cwd(),
-            {ok, [ filename:join(Cwd, Dir) ||
-                Dir <- process(AlienDirs, AppFile, Config) ]}
+        false ->
+            case rebar_config:get_local(Config, alien_dirs, []) of
+                [] ->
+                    {ok, []};
+                AlienDirs ->
+                    ?DEBUG("Processing Alien Dirs ~p~n", [AlienDirs]),
+                    Cwd = rebar_utils:get_cwd(),
+                    {ok, [ filename:join(Cwd, Dir) ||
+                        Dir <- process(AlienDirs, AppFile, Config) ]}
+            end
     end.
 
 'alien:clean'(Config, _AppFile) ->
@@ -59,6 +65,10 @@ clean(Config, _AppFile) ->
 %%
 %% Internal Functions
 %%
+
+is_pending_clean() ->
+    Commands = rebar_config:get_global(issued_commands, []),
+    lists:any(fun(C) -> C =:= 'alien:clean' orelse C =:= 'clean' end, Commands).
 
 cleanup(Config, Clean) ->
     case rebar_config:get_local(Config, alien_dirs, []) of
@@ -141,7 +151,7 @@ apply_config(Dir, [Conf|Rest]) ->
         {copy, Src, Dest} ->
             rebar_file_utils:cp_r([Src], filename:join(Dir, Dest));
         {mkdir, Dest} ->
-            rebar_utils:ensure_dir(filename:join(Dir, Dest));
+            rebar_utils:ensure_dir(filename:join([Dir, Dest, "FOO"]));
         {exec, Cmd} ->
             case rebar_utils:sh(Cmd, [return_on_error, {cd, Dir}]) of
                 {error, {Rc, Err}} ->
@@ -154,39 +164,47 @@ apply_config(Dir, [Conf|Rest]) ->
     apply_config(Dir, Rest).
 
 alien_conf_clean(Dir, Conf) ->
+    rebar_log:log(debug, "Cleaning '~p' ...~n", [Conf]),
     case Conf of
         {create, Dest, _} ->
             rebar_file_utils:rm_rf(filename:join(Dir, Dest));
         {copy, _, Dest} ->
             rebar_file_utils:rm_rf(filename:join(Dir, Dest));
         {mkdir, Dest} ->
-            rebar_utils:rm_rf(filename:join(Dir, Dest));
+            rebar_file_utils:rm_rf(filename:join(Dir, Dest));
         {rule, Rule, _} ->
             case Rule of
                 {Targets, _} ->
-                    [ rebar_utils:rm_rf(Match) || 
+                    [ rebar_file_utils:rm_rf(Match) ||
                                             Match <- match_rule(Dir, Targets) ];
                 Target when is_list(Target) ->
-                    [ rebar_utils:rm_rf(Match) || 
+                    [ rebar_file_utils:rm_rf(Match) ||
                                             Match <- match_rule(Dir, Target) ]
             end
     end.
 
+check(Dir, {Target, Deps}) ->
+    Xs = match_rule(Dir, Target),
+    case match_rule(Dir, Deps) of
+        [] ->
+            ?DEBUG("Skipping rule with no matching dependencies...~n", []),
+            true;
+        Ys ->
+            NeedsUpdate = [ X || X <- Xs, Y <- Ys,
+                   filelib:last_modified(X) < filelib:last_modified(Y) ],
+            ?DEBUG("Modified dependencies: [~p]~n", [NeedsUpdate]),
+            length(NeedsUpdate) > 0
+    end;
 check(Dir, Rule) ->
     length(match_rule(Dir, Rule)) > 0.
 
-match_rule(Dir, {Target, Deps}) ->
-    Xs = match_rule(Dir, Target),
-    Ys = match_rule(Dir, Deps),
-    [ X || X <- Xs, Y <- Ys, 
-           filelib:last_modified(X) < filelib:last_modified(Y) ];
 match_rule(Dir, Rule) when is_list(Rule) ->
     rebar_log:log(debug, "Checking rule '~s' ...~n", [Rule]),
     FileList = case filelib:wildcard(filename:join(Dir, Rule)) of
         [] -> rebar_utils:find_files(Dir, Rule, true);
         Found when is_list(Found) -> Found
     end,
-    rebar_log:log(debug, "Exists: ~p!~n", [FileList]),
+    rebar_log:log(debug, "Exists? ~p!~n", [FileList]),
     FileList.
 
 generate_app_file(Dir, RootAppName) ->
