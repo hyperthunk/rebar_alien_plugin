@@ -52,24 +52,6 @@
     end,
     halt(0).
 
-execute_command(Root, Config, _AppFile) ->
-    Command = rebar_config:get_global(current_command, undefined),
-    case rebar_config:get(Config, alien_conf, []) of
-        [] ->
-            ok;
-        AlienConf ->
-            ?DEBUG("Processing alien source ~s~n", [Root]),
-            RuleBase = proplists:get_value(Root, AlienConf, []),
-            case lists:keyfind(Command, 2, RuleBase) of
-                {command, _, _, Rules} ->
-                    [ apply_config(rebar_utils:get_cwd(), R) || R <- Rules ],
-                    ok;
-                Other ->
-                    ?WARN("Unknown command config ~p~n", [Other]),
-                    ok
-            end
-    end.
-
 preprocess(Config, AppFile) ->
     case is_pending_clean() of
         true ->
@@ -110,6 +92,30 @@ clean(Config, _AppFile) ->
 %%
 %% Internal Functions
 %%
+
+execute_command(Root, Config, _AppFile) ->
+    Cwd = rebar_utils:get_cwd(),
+    case filename:basename(Cwd) of
+        Root ->
+            Command = rebar_config:get_global(current_command, undefined),
+            case rebar_config:get(Config, alien_conf, []) of
+                [] ->
+                    ok;
+                AlienConf ->
+                    ?DEBUG("Processing alien source ~s~n", [Root]),
+                    RuleBase = proplists:get_value(Root, AlienConf, []),
+                    case lists:keyfind(Command, 2, RuleBase) of
+                        {command, _, _, Rules} ->
+                            [ apply_config(rebar_utils:get_cwd(), R) || R <- Rules ],
+                            ok;
+                        Other ->
+                            ?WARN("Unknown command config ~p~n", [Other]),
+                            ok
+                    end
+            end;
+        _ ->
+            ?DEBUG("Ignoring non-alien dir ~s~n", [Cwd])
+    end.
 
 show_command_info({Dir, Commands}) ->
     io:format("Commands for Alien Directory ~s:~n", [Dir]),
@@ -192,7 +198,7 @@ process(AlienDirs, AppFile, RebarConfig) ->
                     Items = proplists:get_value(Dir, Conf, []),
                     Cmds = [ apply_config(Dir, I) || I <- Items ],
                     BaseName = filename:basename(Dir),
-                    maybe_generate_handler(BaseName, Cmds, RebarConfig),
+                    maybe_generate_handler(BaseName, Cmds),
                     [Dir|Acc]
                 end, [], AlienDirs).
 
@@ -218,24 +224,56 @@ apply_config(Dir, {exec, Cmd}) ->
 apply_config(_, {command, _, _, _}=Cmd) ->
     Cmd.
 
-maybe_generate_handler(_, [], _) ->
+maybe_generate_handler(_, []) ->
     ok;
-maybe_generate_handler(Base, Cmds, Config) ->
+maybe_generate_handler(Base, Cmds) ->
     Exports = [ {C, 2} || {command, C, _, _} <- Cmds ],
     Functions = [ gen_function(Base, C) || {command, C, _, _} <- Cmds ],
-    ?DEBUG("Generating ~s module~n", [Base]),
-    Forms = [{attribute, ?LINE, module, list_to_atom(Base)},
-             {attribute, ?LINE, export, Exports}] ++ Functions,
-     case compile:forms(Forms, [report, return]) of
-         {ok, ModName, Binary} ->
-             load_binary(ModName, Binary, Config),
-             ?DEBUG("~p~n", [ModName:module_info()]);
-         {ok, ModName, Binary, _Warnings} ->
-             load_binary(ModName, Binary, Config),
-             ?DEBUG("~p~n", [ModName:module_info()]);
-         Error ->
-             ?ABORT("Unable to compile due to ~p~n", [Error])
-     end.
+    {Forms, Loader} = case code:which(rebar_alien_plugin) of
+        {_,Bin,_} ->
+            ?DEBUG("Compiling from existing binary~n", []),
+            {to_forms(atom_to_list(?MODULE), Exports, Functions, Bin),
+                fun load_binary/2};
+        Other when is_list(Other) ->
+            case compile:file(Other, [debug_info, binary, return_errors]) of
+                {ok, _, Bin} ->
+                    ?DEBUG("Compiling from binary~n", []),
+                    {to_forms(atom_to_list(?MODULE), Exports, Functions, Bin),
+                     fun load_binary/2};
+                Error ->
+                    ?WARN("Unable to recompile ~p: ~p~n", [?MODULE, Error]),
+                    {mod_from_scratch(Base, Exports, Functions), fun evil_load_binary/2}
+            end;
+        _ ->
+            ?WARN("Cannot modify ~p - generating new module~n", [?MODULE]),
+            {mod_from_scratch(Base, Exports, Functions), fun evil_load_binary/2}
+    end,
+    case compile:forms(Forms, [report, return]) of
+        {ok, ModName, Binary} ->
+            Loader(ModName, Binary),
+            ?DEBUG("~p~n", [ModName:module_info()]);
+        {ok, ModName, Binary, _Warnings} ->
+            Loader(ModName, Binary),
+            ?DEBUG("~p~n", [ModName:module_info()]);
+        CompileError ->
+            ?ABORT("Unable to compile: ~p~n", [CompileError])
+    end.
+
+mod_from_scratch(Base, Exports, Functions) ->
+    [{attribute, ?LINE, module, list_to_atom(Base)},
+     {attribute, ?LINE, export, Exports}] ++ Functions.
+
+to_forms(Base, Exports, Functions, Bin) ->
+    case beam_lib:chunks(Bin, [abstract_code]) of
+        {ok, {_,[{abstract_code,{_,[FileDef, ModDef|Code]}}|_]}} ->
+            Code2 = lists:keydelete(eof, 1, Code),
+            [FileDef, ModDef] ++
+            [{attribute,31,export,Exports}] ++
+            Code2 ++ Functions; %%  ++ [EOF],
+        _ ->
+            [{attribute, ?LINE, module, list_to_atom(Base)},
+             {attribute, ?LINE, export, Exports}] ++ Functions
+    end.
 
 gen_function(Base, Cmd) ->
     {function, ?LINE, Cmd, 2, [
@@ -251,13 +289,17 @@ gen_function(Base, Cmd) ->
                      {var,?LINE,'Config'},
                      {var,?LINE,'File'}]}]}]}.
 
-load_binary(Name, Binary, Config) ->
+evil_load_binary(Name, Binary) ->
+    %% this is a nasty hack - perhaps adding the function to *this*
+    %% module would be a better approach, but for now....
+    {module, Name} = load_binary(Name, Binary),
+    {ok, Existing} = application:get_env(rebar, any_dir_modules),
+    application:set_env(rebar, any_dir_modules, [Name|Existing]),
+    Name.
+
+load_binary(Name, Binary) ->
     case code:load_binary(Name, "", Binary) of
         {module, Name}  ->
-            %% this is a nasty hack - perhaps adding the function to *this*
-            %% module would be a better approach, but for now....
-            {ok, Existing} = application:get_env(rebar, any_dir_modules),
-            application:set_env(rebar, any_dir_modules, [Name|Existing]),
             Name;
         {error, Reason} -> ?ABORT("Unable to load binary: ~p~n", [Reason])
     end.
