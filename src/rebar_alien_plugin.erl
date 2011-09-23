@@ -229,20 +229,23 @@ maybe_generate_handler(_, []) ->
 maybe_generate_handler(Base, Cmds) ->
     Exports = [ {C, 2} || {command, C, _, _} <- Cmds ],
     Functions = [ gen_function(Base, C) || {command, C, _, _} <- Cmds ],
-    {Forms, Loader} = case code:which(rebar_alien_plugin) of
+    {Forms, Loader} = case code:get_object_code(rebar_alien_plugin) of
         {_,Bin,_} ->
             ?DEBUG("Compiling from existing binary~n", []),
             {to_forms(atom_to_list(?MODULE), Exports, Functions, Bin),
                 fun load_binary/2};
-        Other when is_list(Other) ->
-            case compile:file(Other, [debug_info, binary, return_errors]) of
+        error ->
+            File = code:which(?MODULE), 
+            case compile:file(File, [debug_info, binary, return_errors]) of
                 {ok, _, Bin} ->
                     ?DEBUG("Compiling from binary~n", []),
-                    {to_forms(atom_to_list(?MODULE), Exports, Functions, Bin),
-                     fun load_binary/2};
+                    {to_forms(atom_to_list(?MODULE), Exports, 
+                              Functions, Bin), fun load_binary/2};
                 Error ->
-                    ?WARN("Unable to recompile ~p: ~p~n", [?MODULE, Error]),
-                    {mod_from_scratch(Base, Exports, Functions), fun evil_load_binary/2}
+                    ?WARN("Unable to recompile ~p: ~p~n", 
+                          [?MODULE, Error]),
+                    {mod_from_scratch(Base, Exports, 
+                                      Functions), fun evil_load_binary/2}
             end;
         _ ->
             ?WARN("Cannot modify ~p - generating new module~n", [?MODULE]),
