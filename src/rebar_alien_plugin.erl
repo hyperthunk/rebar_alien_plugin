@@ -41,10 +41,12 @@
 %%
 
 'alien:commands'(Config, _) ->
-    show_command_info({filename:basename(rebar_utils:get_cwd()),
+    Dir = filename:basename(rebar_utils:get_cwd()),
+    io:format("Global Alien Commands:~n"),
+    show_command_info({Dir,
         [{command, 'alien:commands', "list Alien commands", []},
          {command, 'alien:clean', "clean Alien artefacts", []}]}),
-    io:format("~n"),
+    io:format("Commands for Alien Directory ~s:~n", [Dir]),
     case rebar_config:get(Config, alien_conf, []) of
         [] -> ok;
         CmdSet ->
@@ -117,8 +119,7 @@ execute_command(Root, Config, _AppFile) ->
             ?DEBUG("Ignoring non-alien dir ~s~n", [Cwd])
     end.
 
-show_command_info({Dir, Commands}) ->
-    io:format("Commands for Alien Directory ~s:~n", [Dir]),
+show_command_info({_, Commands}) ->
     [ show_command(Name, Desc) || {command, Name, Desc, _} <- Commands ];
 show_command_info({command, Name, Desc, _}) ->
     show_command(Name, Desc);
