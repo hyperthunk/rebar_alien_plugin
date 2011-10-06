@@ -222,6 +222,8 @@ apply_config(Dir, {exec, Cmd}) ->
             ok;
         _ -> ok
     end;
+apply_config(Dir, {call, {M, F, A}}) ->
+    apply(M, F, [Dir|A]);
 apply_config(_, {command, _, _, _}=Cmd) ->
     Cmd.
 
