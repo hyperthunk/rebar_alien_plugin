@@ -340,8 +340,8 @@ check(Dir, {Target, Deps}) ->
         Ys ->
             NeedsUpdate = [ X || X <- Xs, Y <- Ys,
                    filelib:last_modified(X) < filelib:last_modified(Y) ],
-            ?DEBUG("Modified dependencies: [~p]~n", [NeedsUpdate]),
-            length(NeedsUpdate) > 0
+            ?DEBUG("Modified dependencies: ~p~n", [NeedsUpdate]),
+            length(NeedsUpdate) == 0
     end;
 check(Dir, Rule) ->
     length(match_rule(Dir, Rule)) > 0.
