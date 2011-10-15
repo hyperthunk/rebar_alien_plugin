@@ -8,7 +8,7 @@ for you:
 2. Allow you to deal with custom behaviours for any kind of sub_dirs
 
 To see how this works, take a look at the `examples` directory, which contains a
-sub directory including a simple junit test and maven build. You can run the 
+sub directory including a simple junit test and maven build. You can run the
 example (assuming you have java + maven installed on your system) by changing to
 the `examples/simple` directory and typing:
 
@@ -16,18 +16,19 @@ the `examples/simple` directory and typing:
 
 If you pass `-v` you'll get more verbose output.
 
-Going into `examples/custom` you will find a more complete sample, which does the 
-same thing, but using a more general approach. 
+Going into `examples/custom` you will find a more complete sample, which does the
+same thing, but using a more general approach to the plugin configuration.
 
-Try running `rebar alien:commands` to list the available commands and then 
+Try running `rebar alien-commands` to list the available commands and then
 running the special `mvn:test` command which is added (via configuration!) to
-rebar only for the *inttest* subfolder.
+rebar only for the *inttest* subfolder. The choice of `mvn:test` as a command
+name was intended to mirror the command being passed to maven.
 
-    $ rebar alien:commands
-    ==> inttest (alien:commands)
+    $ rebar alien-commands
+    ==> inttest (alien-commands)
     Commands for Alien Directory inttest:
-    * alien:commands              list Alien commands
-    * alien:clean                 clean Alien artefacts
+    * alien-commands              list Alien commands
+    * alien-clean                 clean Alien artefacts
 
     Commands for Alien Directory inttest:
     * mvn:test                    Run Maven Tests
@@ -80,7 +81,7 @@ rebar only for the *inttest* subfolder.
 The plugin looks in your `rebar.config` for a list of sub-directories to process,
 under the `alien_dirs` configuration element. For each of these directories, the
 plugin will ensure that a valid OTP application file (i.e., a template in the
-`src/<project>.app.src`) is created if it does not already exist.
+`src/<project>.app.src`) is created if not already present.
 
 Secondly, the plugin will look in your `rebar.config` for any additional build
 instructions in the `alien_conf` element. These instructions must take one of the
@@ -91,20 +92,102 @@ following forms:
 3. `{mkdir, Dest}` which creates the specified directory
 4. `{exec, Cmd}` some arbitrary shell command to run in the directory
 5. `{rule, Test, Action}` applies *Action* only if *Test* passes
-6. `{command, Name, Desc, RulesOrActions}` creates a new rebar command
+6. `{make, Options}` runs `make:all/1` in the directory
+7. `{call, {M,F,A}` evaluates `apply/3` with the supplied *MFA* tuple
+8. `{call, {M,F,A,dir}}` as (7), but prepends the current directory to `A`
+9. `{call, {M,F,A}, Extra}` as (8), passes `Extra` to `code:add_pathsa/1` first
+10. `{command, Name, Desc, RulesOrActions}` creates a new rebar command
 
 These instructions allow you to generate, copy or otherwise insert your own custom
-rebar configuration into the target directory. The simple project skeleton in `examples`
-uses this mechanism to push a set of custom `post_hooks` into the `inttest` folder,
-which instruct rebar to run the `mvn clean test` command and execute the *alien*
-tests.
+rebar configuration into the target directory. The simple project skeleton in
+`examples` uses this mechanism to push a set of custom `post_hooks` into
+the `inttest` folder, which instruct rebar to run the `mvn clean test` command
+and execute the *alien* tests.
 
 The `{command, ...}` form creates a new rebar command, mapped to the supplied set
 of actions/rules. See *examples/custom* for the usage pattern.
 
-Running `rebar alien:clean` will undo any actions specified in `alien_conf` (i.e., 
+Running `rebar alien:clean` will undo any actions specified in `alien_conf` (i.e.,
 it will delete any generated/copied files and folder) and remove any `rebar.config`
 that was generated in `src/<project>.app.src` on your behalf.
+
+## Usage Examples
+
+The `rebar_alien_plugin's` purpose is to help you avoid writing plugins unless you
+actually need reusable functionality across projects. Local (source loaded) plugins
+are very useful, but for many simple tasks just using configuration is cleaner and
+more maintainable.
+
+[Here](http://github.com/hyperthunk/luigi_ibrowse) is an example that runs some
+simple sanity checks. The code isn't part of the main build, nor the automated test
+suites, but it's useful to keep a copy of it and having a separate project/sub_dir
+really seems like overkill.
+
+```erlang
+{plugins, [rebar_alien_plugin]}.
+{alien_dirs, ["checks"]}.
+{alien_conf, [
+    {"checks", [
+        {command, 'sanity_checks', "Build + Run Sanity Checks", [
+            %% compile the sources in the 'checks' folder
+            {make, [load]},
+            %% evaluate sanity_checks:run/0 with extra dirs on the path
+            {call, {sanity_checks, run, []}, [".", "../ebin"]}
+        ]}
+    ]}
+]}.
+```
+
+This example is taken from 
+[another project](https://github.com/hyperthunk/edbc_oci). The custom
+`spec-compile` command is being used to download and install a testing 
+framework for C source code, which wouldn't be possible using standard 
+rebar depedencies. It then uses this *alien* tool chain to turn test
+specifications into source code, which in turn is compiled to produce
+a binary. The second `spec-test` command simply executes the compiled
+binary to run the tests. 
+
+```erlang
+%% *alien_dirs get treated like local sub_dirs at runtime*
+{alien_dirs, ["spec"]}.
+{alien_conf, [
+    {"spec", [
+        %% we're adding some new rebar commands here
+
+        {command, 'spec-compile', "build cspec and all tests", [
+            %% rebar get-deps doesn't support non-OTP sources,
+            %% so we end up doing a fetch and install by hand
+            {rule, "cspec",
+                {exec, "git clone https://github.com/visionmedia/cspec.git cspec"}},
+            {rule, "cspec/bin/cspec", {exec, "make -C cspec"}},
+            {rule, "c_src", {mkdir, "c_src"}},
+            {rule, "bin", {mkdir, "bin"}},
+            %% the rule returns true when any member of B in {A, B} has a
+            %% newer timestamp than any member of A
+            {rule, {"c_src/edbc_oci_specs.c", "spec/*.spec"},
+                %% TODO: make this work on win32 ;)
+                {exec, "cat spec/*.spec | cspec/bin/cspec > c_src/edbc_oci_specs.c"}},
+
+            {rule, {"bin/edbc_oci_specs", "c_src/edbc_oci_specs.c"},
+                %% TODO: use the libconf/cc module to generate this
+                {exec, "cc -Icspec/src cspec/build/cspec.o c_src/edbc_oci_specs.c "
+                       "-o bin/edbc_oci_specs"}}
+        ]},
+        {command, 'spec-test', "run all test specs", [
+            {exec, "bin/edbc_oci_specs"}
+        ]}
+    ]}
+]}.
+
+%% these config elements are only processed by running 'alien:clean'
+{alien_clean, [
+    {"spec", ["spec/cspec"]}
+]}.
+```
+
+Doing this with `pre_hooks` is cumbersome and the configuration effectively 
+creates a full blown build plugin on the fly, for minimal effort.
+
 
 ## Installation
 
@@ -130,46 +213,3 @@ use it in many projects. This can be done manually, or using a package manager:
     user@host$ epm install hyperthunk/rebar_alien_plugin    # or
     user@host$ sutro install hyperthunk/rebar_alien_plugin  # or
     user@host$ agner install rebar_alien_plugin
-
-## Usage
-
-Configure the plugin in your `rebar.config`. Here is an example taken from another
-project:
-
-```erlang
-%% *alien_dirs get treated like local sub_dirs at runtime*
-{alien_dirs, ["spec"]}.
-{alien_conf, [
-    {"spec", [
-        %% we're adding some new rebar commands here
-        
-        {command, 'spec:compile', "build cspec and all tests", [
-            %% rebar get-deps doesn't support non-OTP sources,
-            %% so we end up doing a fetch and install by hand
-            {rule, "cspec",
-                {exec, "git clone https://github.com/visionmedia/cspec.git cspec"}},
-            {rule, "cspec/bin/cspec", {exec, "make -C cspec"}},
-            {rule, "c_src", {mkdir, "c_src"}},
-            {rule, "bin", {mkdir, "bin"}},
-            %% the rule returns true when any member of B in {A, B} has a
-            %% newer timestamp than any member of A
-            {rule, {"c_src/edbc_oci_specs.c", "spec/*.spec"},
-                %% TODO: make this work on win32 ;)
-                {exec, "cat spec/*.spec | cspec/bin/cspec > c_src/edbc_oci_specs.c"}},
-
-            {rule, {"bin/edbc_oci_specs", "c_src/edbc_oci_specs.c"},
-                %% TODO: use the libconf/cc module to generate this
-                {exec, "cc -Icspec/src cspec/build/cspec.o c_src/edbc_oci_specs.c "
-                       "-o bin/edbc_oci_specs"}}
-        ]},
-        {command, 'spec:test', "run all test specs", [
-            {exec, "bin/edbc_oci_specs"}
-        ]}
-    ]}
-]}.
-
-%% these config elements are only processed by running 'alien:clean'
-{alien_clean, [
-    {"spec", ["spec/cspec"]}
-]}.
-```

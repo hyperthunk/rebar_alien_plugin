@@ -31,7 +31,7 @@
 -export([clean/2, preprocess/2]).
 
 %% special rebar hooks
--export(['alien:commands'/2, 'alien:clean'/2]).
+-export(['alien-commands'/2, 'alien-clean'/2]).
 
 %% command api hooks
 -export([execute_command/3]).
@@ -40,12 +40,12 @@
 %% Plugin API
 %%
 
-'alien:commands'(Config, _) ->
+'alien-commands'(Config, _) ->
     Dir = filename:basename(rebar_utils:get_cwd()),
     io:format("Global Alien Commands:~n"),
     show_command_info({Dir,
-        [{command, 'alien:commands', "list Alien commands", []},
-         {command, 'alien:clean', "clean Alien artefacts", []}]}),
+        [{command, 'alien-commands', "list Alien commands", []},
+         {command, 'alien-clean', "clean Alien artefacts", []}]}),
     io:format("Commands for Alien Directory ~s:~n", [Dir]),
     case rebar_config:get(Config, alien_conf, []) of
         [] -> ok;
@@ -71,7 +71,7 @@ preprocess(Config, AppFile) ->
             end
     end.
 
-'alien:clean'(Config, _AppFile) ->
+'alien-clean'(Config, _AppFile) ->
     Clean = fun(Dir, Item) ->
         ?DEBUG("Cleaning ~p~n", [Item]),
         alien_conf_clean(Dir, Item)
@@ -99,7 +99,7 @@ execute_command(Root, Config, _AppFile) ->
     Cwd = rebar_utils:get_cwd(),
     case filename:basename(Cwd) of
         Root ->
-            Command = rebar_config:get_global(current_command, undefined),
+            Command = rebar_utils:command_info(current),
             case rebar_config:get(Config, alien_conf, []) of
                 [] ->
                     ok;
@@ -108,7 +108,8 @@ execute_command(Root, Config, _AppFile) ->
                     RuleBase = proplists:get_value(Root, AlienConf, []),
                     case lists:keyfind(Command, 2, RuleBase) of
                         {command, _, _, Rules} ->
-                            [ apply_config(rebar_utils:get_cwd(), R) || R <- Rules ],
+                            [ apply_config(rebar_utils:get_cwd(), R) || 
+                                                                R <- Rules ],
                             ok;
                         Other ->
                             ?WARN("Unknown command config ~p~n", [Other]),
@@ -131,7 +132,7 @@ show_command(Name, Desc) ->
     io:format("* ~s~s~s~n", [Name, Spacer, Desc]).
 
 is_pending_clean() ->
-    Commands = rebar_config:get_global(issued_commands, []),
+    Commands = rebar_utils:command_info(issued),
     lists:any(fun(C) -> C =:= 'alien:clean' orelse C =:= 'clean' end, Commands).
 
 cleanup(Config, Clean) ->
@@ -161,7 +162,8 @@ cleanup(Config, Clean) ->
 is_alien_dependency(AppFile) ->
     case get_app_description(AppFile) of
         {found, Desc} ->
-            case re:run(Desc, "\\[(Alien Dependency)\\]", [{capture, all, list}]) of
+            case re:run(Desc, "\\[(Alien Dependency)\\]", 
+                        [{capture, all, list}]) of
                 {match, _} -> true;
                 _Other -> false
             end;
@@ -222,8 +224,16 @@ apply_config(Dir, {exec, Cmd}) ->
             ok;
         _ -> ok
     end;
-apply_config(Dir, {call, {M, F, A}}) ->
-    apply(M, F, [Dir|A]);
+apply_config(_, {make, Options}) ->
+    make:all(Options);
+apply_config(Dir, {call, {M, F, A, dir}}) ->
+    apply_config(Dir, {call, {M, F, [Dir|A]}});
+apply_config(Dir, {call, {_,_,_}=MFA, Extra}) ->
+    code:add_pathsa(Extra),
+    apply_config(Dir, {call, MFA});
+apply_config(_, {call, {M, F, A}}) ->
+    code:ensure_loaded(M),
+    apply(M, F, A);
 apply_config(_, {command, _, _, _}=Cmd) ->
     Cmd.
 
@@ -238,16 +248,16 @@ maybe_generate_handler(Base, Cmds) ->
             {to_forms(atom_to_list(?MODULE), Exports, Functions, Bin),
                 fun load_binary/2};
         error ->
-            File = code:which(?MODULE), 
+            File = code:which(?MODULE),
             case compile:file(File, [debug_info, binary, return_errors]) of
                 {ok, _, Bin} ->
                     ?DEBUG("Compiling from binary~n", []),
-                    {to_forms(atom_to_list(?MODULE), Exports, 
+                    {to_forms(atom_to_list(?MODULE), Exports,
                               Functions, Bin), fun load_binary/2};
                 Error ->
-                    ?WARN("Unable to recompile ~p: ~p~n", 
+                    ?WARN("Unable to recompile ~p: ~p~n",
                           [?MODULE, Error]),
-                    {mod_from_scratch(Base, Exports, 
+                    {mod_from_scratch(Base, Exports,
                                       Functions), fun evil_load_binary/2}
             end;
         _ ->
@@ -328,7 +338,7 @@ alien_conf_clean(Dir, Conf) ->
                     [ rebar_file_utils:rm_rf(Match) ||
                                             Match <- match_rule(Dir, Target) ]
             end;
-        {command, _, _, _} -> ok
+        _ -> ok
     end.
 
 check(Dir, {Target, Deps}) ->
@@ -341,7 +351,8 @@ check(Dir, {Target, Deps}) ->
             NeedsUpdate = [ X || X <- Xs, Y <- Ys,
                    filelib:last_modified(X) < filelib:last_modified(Y) ],
             ?DEBUG("Modified dependencies: ~p~n", [NeedsUpdate]),
-            length(NeedsUpdate) == 0
+            %% there are some matching Xs, but no Ys are newer on the file system
+            length(Xs) > 0 andalso length(NeedsUpdate) == 0
     end;
 check(Dir, Rule) ->
     length(match_rule(Dir, Rule)) > 0.
