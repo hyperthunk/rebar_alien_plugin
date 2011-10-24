@@ -1,12 +1,9 @@
 {application, rebar_alien_plugin,
  [
   {description, ""},
-  {vsn, "1"},
-  {registered, []},
+  {vsn, "0.0.2"},
   {applications, [
                   kernel,
                   stdlib
-                 ]},
-  {mod, { rebar_alien_plugin, []}},
-  {env, []}
+                 ]}
  ]}.
