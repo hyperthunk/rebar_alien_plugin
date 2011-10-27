@@ -108,7 +108,7 @@ execute_command(Root, Config, _AppFile) ->
                     RuleBase = proplists:get_value(Root, AlienConf, []),
                     case lists:keyfind(Command, 2, RuleBase) of
                         {command, _, _, Rules} ->
-                            [ apply_config(rebar_utils:get_cwd(), R) || 
+                            [ apply_config(rebar_utils:get_cwd(), R) ||
                                                                 R <- Rules ],
                             ok;
                         Other ->
@@ -162,7 +162,7 @@ cleanup(Config, Clean) ->
 is_alien_dependency(AppFile) ->
     case get_app_description(AppFile) of
         {found, Desc} ->
-            case re:run(Desc, "\\[(Alien Dependency)\\]", 
+            case re:run(Desc, "\\[(Alien Dependency)\\]",
                         [{capture, all, list}]) of
                 {match, _} -> true;
                 _Other -> false
@@ -217,7 +217,9 @@ apply_config(Dir, {copy, Src, Dest}) ->
 apply_config(Dir, {mkdir, Dest}) ->
     rebar_utils:ensure_dir(filename:join([Dir, Dest, "FOO"]));
 apply_config(Dir, {exec, Cmd}) ->
-    case rebar_utils:sh(Cmd, [return_on_error, {cd, Dir}]) of
+    apply_config(Dir, {exec, Cmd, [{cd, Dir}]});
+apply_config(_Dir, {exec, Cmd, Opts}) ->
+    case rebar_utils:sh(Cmd, [return_on_error|Opts]) of
         {error, {Rc, Err}} ->
             rebar_log:log(warn, "Command '~s' failed with ~p: ~s~n",
                          [Cmd, Rc, Err]),
@@ -235,7 +237,9 @@ apply_config(_, {call, {M, F, A}}) ->
     code:ensure_loaded(M),
     apply(M, F, A);
 apply_config(_, {command, _, _, _}=Cmd) ->
-    Cmd.
+    Cmd;
+apply_config(Dir, InstructionSet) when is_list(InstructionSet) ->
+    [ apply_config(Dir, I) || I <- InstructionSet ].
 
 maybe_generate_handler(_, []) ->
     ok;
@@ -276,7 +280,8 @@ maybe_generate_handler(Base, Cmds) ->
     end.
 
 mod_from_scratch(Base, Exports, Functions) ->
-    [{attribute, ?LINE, module, list_to_atom(Base)},
+    [{attribute, ?LINE, module, list_to_atom(Base ++
+                                             "_custom_build_plugin")},
      {attribute, ?LINE, export, Exports}] ++ Functions.
 
 to_forms(Base, Exports, Functions, Bin) ->
@@ -308,7 +313,8 @@ gen_function(Base, Cmd) ->
 evil_load_binary(Name, Binary) ->
     %% this is a nasty hack - perhaps adding the function to *this*
     %% module would be a better approach, but for now....
-    {module, Name} = load_binary(Name, Binary),
+    ?DEBUG("Evil Loading: ~p~n", [Name]),
+    Name = load_binary(Name, Binary),
     {ok, Existing} = application:get_env(rebar, any_dir_modules),
     application:set_env(rebar, any_dir_modules, [Name|Existing]),
     Name.

@@ -91,12 +91,13 @@ following forms:
 2. `{create, Dest, Data}` which creates a file `Dest` with the contents `Data`
 3. `{mkdir, Dest}` which creates the specified directory
 4. `{exec, Cmd}` some arbitrary shell command to run in the directory
-5. `{rule, Test, Action}` applies *Action* only if *Test* passes
-6. `{make, Options}` runs `make:all/1` in the directory
-7. `{call, {M,F,A}` evaluates `apply/3` with the supplied *MFA* tuple
-8. `{call, {M,F,A,dir}}` as (7), but prepends the current directory to `A`
-9. `{call, {M,F,A}, Extra}` as (8), passes `Extra` to `code:add_pathsa/1` first
-10. `{command, Name, Desc, RulesOrActions}` creates a new rebar command
+5. `{exec, Cmd, Opts}` as (4), but with options passed to the shell environment
+6. `{rule, Test, Action}` applies *Action* only if *Test* passes
+7. `{make, Options}` runs `make:all/1` in the directory
+8. `{call, {M,F,A}` evaluates `apply/3` with the supplied *MFA* tuple
+9. `{call, {M,F,A,dir}}` as (7), but prepends the current directory to `A`
+10. `{call, {M,F,A}, Extra}` as (8), passes `Extra` to `code:add_pathsa/1` first
+11. `{command, Name, Desc, RulesOrActions}` creates a new rebar command
 
 These instructions allow you to generate, copy or otherwise insert your own custom
 rebar configuration into the target directory. The simple project skeleton in
@@ -192,8 +193,7 @@ creates a full blown build plugin on the fly, for minimal effort.
 ## Installation
 
 The *rebar_alien_plugin* requires a recent version rebar with support for plugins
-hooking into the `Module:preprocess/2` mechanism. At the time of writing, you will
-need to use [this branch](https://github.com/hyperthunk/rebar/tree/first-class-plugins).
+hooking into the `Module:preprocess/2` mechanism. 
 
 Include the following tuple in your rebar deps:
 
