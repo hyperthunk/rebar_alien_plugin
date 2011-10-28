@@ -22,6 +22,8 @@
 %% -----------------------------------------------------------------------------
 -module(rebar_alien_plugin).
 
+-include_lib("kernel/include/file.hrl").
+
 -define(DEBUG(Msg, Args), ?LOG(debug, Msg, Args)).
 -define(WARN(Msg, Args), ?LOG(warn, Msg, Args)).
 -define(LOG(Lvl, Msg, Args), rebar_log:log(Lvl, Msg, Args)).
@@ -40,7 +42,48 @@
 %% Plugin API
 %%
 
+preprocess(Config, AppFile) ->
+    case is_pending_clean() of
+        true ->
+            %% Is this *really* true!?
+            {ok, []};
+        false ->
+            Command = rebar_utils:command_info(current),
+            case Command of
+                'alien-commands' ->
+                    {ok, []};
+                _ ->
+                    case rebar_config:get_local(Config, alien_dirs, []) of
+                        [] ->
+                            {ok, []};
+                        AlienDirs ->
+                            ?DEBUG("Processing Alien Dirs ~p~n", [AlienDirs]),
+                            Cwd = rebar_utils:get_cwd(),
+                            AlienSpecs = process(AlienDirs, AppFile, Config),
+                            {Command, Extras} = 
+                                lists:foldl(fun calculate_pre_dirs/2,
+                                            {Command, []}, AlienSpecs),
+                            ?DEBUG("Extras: ~p~n", [Extras]),
+                            {ok, [ filename:join(Cwd, D) || D <- Extras ]}
+                    end
+                    
+            end
+    end.
+
+calculate_pre_dirs({{_Dir, explicit}, undefined}, Acc) ->
+    Acc;
+calculate_pre_dirs({{Dir, explicit}, Handler}, {Command, Acc}=AccIn) ->
+    case erlang:function_exported(Handler, Command, 2) of
+        true ->
+            {Command, [Dir|Acc]};
+        false ->
+            AccIn
+    end;
+calculate_pre_dirs({Dir, _Handler}, {Command, Acc}) ->
+    {Command, [Dir|Acc]}.
+
 'alien-commands'(Config, _) ->
+    ?DEBUG("Processing alien-commands~n", []),
     Dir = filename:basename(rebar_utils:get_cwd()),
     io:format("Global Alien Commands:~n"),
     show_command_info({Dir,
@@ -53,23 +96,6 @@
             [ show_command_info(C) || C <- CmdSet ]
     end,
     halt(0).
-
-preprocess(Config, AppFile) ->
-    case is_pending_clean() of
-        true ->
-            %% Is this *really* true!?
-            {ok, []};
-        false ->
-            case rebar_config:get_local(Config, alien_dirs, []) of
-                [] ->
-                    {ok, []};
-                AlienDirs ->
-                    ?DEBUG("Processing Alien Dirs ~p~n", [AlienDirs]),
-                    Cwd = rebar_utils:get_cwd(),
-                    {ok, [ filename:join(Cwd, Dir) ||
-                        Dir <- process(AlienDirs, AppFile, Config) ]}
-            end
-    end.
 
 'alien-clean'(Config, _AppFile) ->
     Clean = fun(Dir, Item) ->
@@ -96,16 +122,21 @@ clean(Config, _AppFile) ->
 %%
 
 execute_command(Root, Config, _AppFile) ->
+    BaseDir = rebar_config:get_global(base_dir, undefined),
     Cwd = rebar_utils:get_cwd(),
-    case filename:basename(Cwd) of
-        Root ->
+    case (Cwd -- (BaseDir ++ "/")) of
+        [] ->
+            ?DEBUG("Ignoring non-alien dir ~s~n", [Cwd]);
+        ActualRoot ->
             Command = rebar_utils:command_info(current),
             case rebar_config:get(Config, alien_conf, []) of
                 [] ->
                     ok;
                 AlienConf ->
-                    ?DEBUG("Processing alien source ~s~n", [Root]),
-                    RuleBase = proplists:get_value(Root, AlienConf, []),
+                    ?DEBUG("Processing alien source ~s (actual ~s)~n", 
+                            [Root, ActualRoot]),
+                    ?DEBUG("alien config = ~p~n", [AlienConf]),
+                    RuleBase = proplists:get_value(ActualRoot, AlienConf, []),
                     case lists:keyfind(Command, 2, RuleBase) of
                         {command, _, _, Rules} ->
                             [ apply_config(rebar_utils:get_cwd(), R) ||
@@ -115,9 +146,7 @@ execute_command(Root, Config, _AppFile) ->
                             ?WARN("Unknown command config ~p~n", [Other]),
                             ok
                     end
-            end;
-        _ ->
-            ?DEBUG("Ignoring non-alien dir ~s~n", [Cwd])
+            end
     end.
 
 show_command_info({_, Commands}) ->
@@ -141,8 +170,9 @@ cleanup(Config, Clean) ->
         [] -> ok;
         AlienDirs ->
             Conf = rebar_config:get_local(Config, alien_conf, []),
-            ?DEBUG("Checking Alien Dir '~s' for OTP app file(s)~n", [AlienDirs]),
-            DirClean = fun(Dir) ->
+            ?DEBUG("Checking Alien Dirs ~p for OTP app file(s)~n", [AlienDirs]),
+            DirClean = 
+            fun(Dir) ->
                 case rebar_app_utils:is_app_dir(Dir) of
                     {true, Existing} ->
                         case is_alien_dependency(Existing) of
@@ -187,22 +217,32 @@ get_app_description(Existing) ->
     end.
 
 process(AlienDirs, AppFile, RebarConfig) ->
+    PendingDirs = [ Spec || Spec <- AlienDirs, get(Spec) =:= undefined ],
+    Processed = process_config(PendingDirs, AppFile, RebarConfig),
+    [ put(Spec, Handler) || {{_, explicit}=Spec, Handler} <- Processed ],
+    PreExisting = AlienDirs -- PendingDirs,
+    Processed ++ [ {Spec, get(Spec)} || Spec <- PreExisting ].
+
+process_config(AlienDirs, AppFile, RebarConfig) ->
     Conf = rebar_config:get_local(RebarConfig, alien_conf, []),
-    ?DEBUG("Checking Alien Dir '~s' for OTP app file(s)~n", [AlienDirs]),
-    lists:foldl(fun(Dir, Acc) ->
-                    case rebar_app_utils:is_app_dir(Dir) of
-                        {true, Existing} ->
-                            ?DEBUG("Found '~s'~n", [Existing]),
-                            ok;
-                        false ->
-                            generate_app_file(Dir,
-                                rebar_app_utils:app_src_to_app(AppFile))
+    lists:foldl(fun(DirSpec, Acc) ->
+                    Dir = case DirSpec of
+                        {Path, explicit} -> Path;
+                        _ ->
+                            case rebar_app_utils:is_app_dir(DirSpec) of
+                                {true, _Existing} ->
+                                    ok;
+                                false ->
+                                    generate_app_file(DirSpec,
+                                       rebar_app_utils:app_src_to_app(AppFile))
+                            end,
+                            DirSpec
                     end,
                     Items = proplists:get_value(Dir, Conf, []),
                     Cmds = [ apply_config(Dir, I) || I <- Items ],
                     BaseName = filename:basename(Dir),
-                    maybe_generate_handler(BaseName, Cmds),
-                    [Dir|Acc]
+                    Handler = maybe_generate_handler(BaseName, Cmds),
+                    [{DirSpec, Handler}|Acc]
                 end, [], AlienDirs).
 
 apply_config(Dir, {rule, Rule, Instruction}) ->
@@ -216,13 +256,22 @@ apply_config(Dir, {copy, Src, Dest}) ->
     rebar_file_utils:cp_r([Src], filename:join(Dir, Dest));
 apply_config(Dir, {mkdir, Dest}) ->
     rebar_utils:ensure_dir(filename:join([Dir, Dest, "FOO"]));
+apply_config(Dir, {chmod, Target, Mode}) ->
+    Filename = filename:join(Dir, Target),
+    {ok, #file_info{mode = Prev}} = file:read_file_info(Filename),
+    case file:change_mode(Filename, Prev bor Mode) of
+        ok -> ok;
+        {error, Reason} ->
+            Err = file:format_error(Reason),
+            ?WARN("Unable to change mode on ~s: ~s~n", [Target, Err]),
+            ok
+    end;
 apply_config(Dir, {exec, Cmd}) ->
     apply_config(Dir, {exec, Cmd, [{cd, Dir}]});
 apply_config(_Dir, {exec, Cmd, Opts}) ->
     case rebar_utils:sh(Cmd, [return_on_error|Opts]) of
         {error, {Rc, Err}} ->
-            rebar_log:log(warn, "Command '~s' failed with ~p: ~s~n",
-                         [Cmd, Rc, Err]),
+            ?WARN("Command '~s' failed with ~p: ~s~n", [Cmd, Rc, Err]),
             ok;
         _ -> ok
     end;
@@ -242,7 +291,7 @@ apply_config(Dir, InstructionSet) when is_list(InstructionSet) ->
     [ apply_config(Dir, I) || I <- InstructionSet ].
 
 maybe_generate_handler(_, []) ->
-    ok;
+    undefined;
 maybe_generate_handler(Base, Cmds) ->
     Exports = [ {C, 2} || {command, C, _, _} <- Cmds ],
     Functions = [ gen_function(Base, C) || {command, C, _, _} <- Cmds ],
@@ -268,16 +317,16 @@ maybe_generate_handler(Base, Cmds) ->
             ?WARN("Cannot modify ~p - generating new module~n", [?MODULE]),
             {mod_from_scratch(Base, Exports, Functions), fun evil_load_binary/2}
     end,
-    case compile:forms(Forms, [report, return]) of
+    Loaded = case compile:forms(Forms, [report, return]) of
         {ok, ModName, Binary} ->
-            Loader(ModName, Binary),
-            ?DEBUG("~p~n", [ModName:module_info()]);
+            Loader(ModName, Binary);
         {ok, ModName, Binary, _Warnings} ->
-            Loader(ModName, Binary),
-            ?DEBUG("~p~n", [ModName:module_info()]);
+            Loader(ModName, Binary);
         CompileError ->
             ?ABORT("Unable to compile: ~p~n", [CompileError])
-    end.
+    end,
+    ?DEBUG("~p~n", [Loaded:module_info()]),
+    Loaded.
 
 mod_from_scratch(Base, Exports, Functions) ->
     [{attribute, ?LINE, module, list_to_atom(Base ++
@@ -322,12 +371,13 @@ evil_load_binary(Name, Binary) ->
 load_binary(Name, Binary) ->
     case code:load_binary(Name, "", Binary) of
         {module, Name}  ->
+            ?DEBUG("Module ~p loaded~n", [Name]),
             Name;
         {error, Reason} -> ?ABORT("Unable to load binary: ~p~n", [Reason])
     end.
 
 alien_conf_clean(Dir, Conf) ->
-    rebar_log:log(debug, "Cleaning '~p' ...~n", [Conf]),
+    ?DEBUG("Cleaning '~p' ...~n", [Conf]),
     case Conf of
         {create, Dest, _} ->
             rebar_file_utils:rm_rf(filename:join(Dir, Dest));
@@ -364,12 +414,12 @@ check(Dir, Rule) ->
     length(match_rule(Dir, Rule)) > 0.
 
 match_rule(Dir, Rule) when is_list(Rule) ->
-    rebar_log:log(debug, "Checking rule '~s' ...~n", [Rule]),
+    ?DEBUG("Checking rule '~s' ...~n", [Rule]),
     FileList = case filelib:wildcard(filename:join(Dir, Rule)) of
         [] -> rebar_utils:find_files(Dir, Rule, true);
         Found when is_list(Found) -> Found
     end,
-    rebar_log:log(debug, "Exists? ~p!~n", [FileList]),
+    ?DEBUG("Matched ~p~n", [FileList]),
     FileList.
 
 generate_app_file(Dir, RootAppName) ->
