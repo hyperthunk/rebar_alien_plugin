@@ -254,6 +254,19 @@ apply_config(Dir, {copy, Src, Dest}) ->
     rebar_file_utils:cp_r([Src], filename:join(Dir, Dest));
 apply_config(Dir, {mkdir, Dest}) ->
     rebar_utils:ensure_dir(filename:join([Dir, Dest, "FOO"]));
+apply_config(Dir, {link, Target, Alias}) ->
+    Filename = filename:join(Dir, Target),
+    case file:make_symlink(Filename, filename:join(Dir, Alias)) of
+        ok ->
+            ok;
+        {error, enotsup} ->
+            %% TODO: do a copy on windows and elsewhere
+            ?WARN("Unable to symlink ~s as ~s~n", [Target, Alias]),
+            ok;
+        {error, _} ->
+            ?WARN("Unable to symlink ~s as ~s~n", [Target, Alias]),
+            ok
+    end;
 apply_config(Dir, {chmod, Target, Mode}) ->
     Filename = filename:join(Dir, Target),
     {ok, #file_info{mode = Prev}} = file:read_file_info(Filename),
