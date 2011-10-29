@@ -57,12 +57,15 @@ preprocess(Config, AppFile) ->
                         [] ->
                             {ok, []};
                         AlienDirs ->
-                            ?DEBUG("Processing Alien Dirs ~p~n", [AlienDirs]),
+                            ?DEBUG("Pre-processing ~p for Alien Dirs ~p~n", 
+                                    [Command, AlienDirs]),
                             Cwd = rebar_utils:get_cwd(),
                             AlienSpecs = process(AlienDirs, AppFile, Config),
                             {Command, Extras} =
                                 lists:foldl(fun calculate_pre_dirs/2,
                                             {Command, []}, AlienSpecs),
+                            ?DEBUG("Command: ~p, Extras: ~p~n", 
+                                    [Command, Extras]),
                             {ok, [ filename:join(Cwd, D) || D <- Extras ]}
                     end
 
@@ -113,7 +116,7 @@ calculate_pre_dirs({{_Dir, explicit}, undefined}, Acc) ->
 calculate_pre_dirs({{Dir, explicit}, Handler}, {Command, Acc}=AccIn) ->
     case erlang:function_exported(Handler, Command, 2) of
         true ->
-            case get({Dir, Command}) of
+            case rebar_config:get_global({Dir, Command}, undefined) of
                 undefined ->
                     {Command, [Dir|Acc]};
                 done ->
