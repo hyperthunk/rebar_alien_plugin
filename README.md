@@ -87,17 +87,19 @@ Secondly, the plugin will look in your `rebar.config` for any additional build
 instructions in the `alien_conf` element. These instructions must take one of the
 following forms:
 
-1. `{copy, Src, Dest}` which copies `Src` to `Dest`
-2. `{create, Dest, Data}` which creates a file `Dest` with the contents `Data`
-3. `{mkdir, Dest}` which creates the specified directory
-4. `{exec, Cmd}` some arbitrary shell command to run in the directory
-5. `{exec, Cmd, Opts}` as (4), but with options passed to the shell environment
-6. `{rule, Test, Action}` applies *Action* only if *Test* passes
-7. `{make, Options}` runs `make:all/1` in the directory
-8. `{call, {M,F,A}` evaluates `apply/3` with the supplied *MFA* tuple
-9. `{call, {M,F,A,dir}}` as (7), but prepends the current directory to `A`
-10. `{call, {M,F,A}, Extra}` as (8), passes `Extra` to `code:add_pathsa/1` first
-11. `{command, Name, Desc, RulesOrActions}` creates a new rebar command
+- `{mkdir, Dest}` which creates the specified directory
+- `{create, Dest, Data}` which creates a file `Dest` with the contents `Data`
+- `{copy, Src, Dest}` which copies `Src` to `Dest`
+- `{link, Src, Alias}` creates a symlink on supported platforms, copies otherwise
+- `{chmod, Target, Mode}` change file mode(s) in Target
+- `{exec, Cmd}` some arbitrary shell command to run in the directory
+- `{exec, Cmd, Opts}` as (4), but with options passed to the shell environment
+- `{make, Options}` runs `make:all/1` in the directory
+- `{call, {M,F,A}` evaluates `apply/3` with the supplied *MFA* tuple
+- `{call, {M,F,A,dir}}` as (7), but prepends the current directory to `A`
+- `{call, {M,F,A}, Extra}` as (8), passes `Extra` to `code:add_pathsa/1` first
+- `{rule, Test, Action}` applies *Action* only if *Test* passes
+- `{command, Name, Desc, RulesOrActions}` creates a new rebar command
 
 These instructions allow you to generate, copy or otherwise insert your own custom
 rebar configuration into the target directory. The simple project skeleton in
