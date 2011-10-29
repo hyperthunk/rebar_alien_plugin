@@ -30,7 +30,7 @@
 -define(ABORT(Msg, Args), rebar_utils:abort(Msg, Args)).
 
 %% standard rebar hooks
--export([clean/2, preprocess/2]).
+-export([preprocess/2]).
 
 %% special rebar hooks
 -export(['alien-commands'/2, 'alien-clean'/2]).
@@ -53,7 +53,7 @@ preprocess(Config, AppFile) ->
                 'alien-commands' ->
                     {ok, []};
                 _ ->
-                    case rebar_config:get_local(Config, alien_dirs, []) of
+                    case load_conf(alien_dirs, Command, Config) of
                         [] ->
                             {ok, []};
                         AlienDirs ->
@@ -70,12 +70,28 @@ preprocess(Config, AppFile) ->
             end
     end.
 
+load_conf(Conf, Command, Config) ->
+    Cwd = rebar_utils:get_cwd(),
+    BaseDir = rebar_config:get_global(base_dir, undefined),
+    ActualRoot = (Cwd -- (BaseDir ++ "/")),
+    case rebar_config:get_global({ActualRoot, Command}, undefined) of
+        undefined ->
+            rebar_config:get(Config, Conf, []);
+        done ->
+            []
+    end.
+
 calculate_pre_dirs({{_Dir, explicit}, undefined}, Acc) ->
     Acc;
 calculate_pre_dirs({{Dir, explicit}, Handler}, {Command, Acc}=AccIn) ->
     case erlang:function_exported(Handler, Command, 2) of
         true ->
-            {Command, [Dir|Acc]};
+            case get({Dir, Command}) of
+                undefined ->
+                    {Command, [Dir|Acc]};
+                done ->
+                    AccIn
+            end;
         false ->
             AccIn
     end;
@@ -106,17 +122,6 @@ calculate_pre_dirs({Dir, _Handler}, {Command, Acc}) ->
                                    D /= ignored ],
     ok.
 
-clean(Config, _AppFile) ->
-    Clean = fun(Dir, Item) ->
-        case lists:member(element(1, Item), [rule, command]) of
-            true -> ok;
-            false -> alien_conf_clean(Dir, Item)
-        end
-    end,
-    [ rebar_file_utils:rm_rf(D) || D <- cleanup(Config, Clean),
-                                   D /= ignored ],
-    ok.
-
 %%
 %% Internal Functions
 %%
@@ -129,7 +134,7 @@ execute_command(Root, Config, _AppFile) ->
             ?DEBUG("Ignoring non-alien dir ~s~n", [Cwd]);
         ActualRoot ->
             Command = rebar_utils:command_info(current),
-            case rebar_config:get(Config, alien_conf, []) of
+            case load_conf(alien_conf, Command, Config) of
                 [] ->
                     ok;
                 AlienConf ->
@@ -141,6 +146,7 @@ execute_command(Root, Config, _AppFile) ->
                         {command, _, _, Rules} ->
                             [ apply_config(rebar_utils:get_cwd(), R) ||
                                                                 R <- Rules ],
+                            rebar_config:set_global({ActualRoot, Command}, done),
                             ok;
                         Other ->
                             ?WARN("Unknown command config ~p~n", [Other]),
@@ -167,7 +173,7 @@ is_pending_clean() ->
 cleanup(Config, Clean) ->
     ?DEBUG("Cleanup: ~p~n", [Config]),
     case rebar_config:get_local(Config, alien_dirs, []) of
-        [] -> ok;
+        [] -> [];
         AlienDirs ->
             Conf = rebar_config:get_local(Config, alien_conf, []),
             ?DEBUG("Checking Alien Dirs ~p for OTP app file(s)~n", [AlienDirs]),
@@ -216,14 +222,15 @@ get_app_description(Existing) ->
             {error, Other}
     end.
 
-process(AlienDirs, AppFile, RebarConfig) ->
-    PendingDirs = [ Spec || Spec <- AlienDirs, get(Spec) =:= undefined ],
-    Processed = process_config(PendingDirs, AppFile, RebarConfig),
-    [ put(Spec, Handler) || {{_, explicit}=Spec, Handler} <- Processed ],
-    PreExisting = AlienDirs -- PendingDirs,
-    Processed ++ [ {Spec, get(Spec)} || Spec <- PreExisting ].
+%process(AlienDirs, AppFile, RebarConfig) ->
+%    PendingDirs = [ Spec || Spec <- AlienDirs, get(Spec) =:= undefined ],
+%    ?DEBUG("PendingDirs: ~p~n", [PendingDirs]),
+%    Processed = process_config(PendingDirs, AppFile, RebarConfig),
+%    [ put(Spec, Handler) || {{_, explicit}=Spec, Handler} <- Processed ],
+%    PreExisting = AlienDirs -- PendingDirs,
+%    Processed ++ [ {Spec, get(Spec)} || Spec <- PreExisting ].
 
-process_config(AlienDirs, AppFile, RebarConfig) ->
+process(AlienDirs, AppFile, RebarConfig) ->
     Conf = rebar_config:get_local(RebarConfig, alien_conf, []),
     lists:foldl(fun(DirSpec, Acc) ->
                     Dir = case DirSpec of
