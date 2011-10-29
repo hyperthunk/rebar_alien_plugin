@@ -60,43 +60,14 @@ preprocess(Config, AppFile) ->
                             ?DEBUG("Processing Alien Dirs ~p~n", [AlienDirs]),
                             Cwd = rebar_utils:get_cwd(),
                             AlienSpecs = process(AlienDirs, AppFile, Config),
-                            {Command, Extras} = 
+                            {Command, Extras} =
                                 lists:foldl(fun calculate_pre_dirs/2,
                                             {Command, []}, AlienSpecs),
-                            ?DEBUG("Extras: ~p~n", [Extras]),
                             {ok, [ filename:join(Cwd, D) || D <- Extras ]}
                     end
-                    
+
             end
     end.
-
-load_conf(Conf, Command, Config) ->
-    Cwd = rebar_utils:get_cwd(),
-    BaseDir = rebar_config:get_global(base_dir, undefined),
-    ActualRoot = (Cwd -- (BaseDir ++ "/")),
-    case rebar_config:get_global({ActualRoot, Command}, undefined) of
-        undefined ->
-            rebar_config:get(Config, Conf, []);
-        done ->
-            []
-    end.
-
-calculate_pre_dirs({{_Dir, explicit}, undefined}, Acc) ->
-    Acc;
-calculate_pre_dirs({{Dir, explicit}, Handler}, {Command, Acc}=AccIn) ->
-    case erlang:function_exported(Handler, Command, 2) of
-        true ->
-            case get({Dir, Command}) of
-                undefined ->
-                    {Command, [Dir|Acc]};
-                done ->
-                    AccIn
-            end;
-        false ->
-            AccIn
-    end;
-calculate_pre_dirs({Dir, _Handler}, {Command, Acc}) ->
-    {Command, [Dir|Acc]}.
 
 'alien-commands'(Config, _) ->
     ?DEBUG("Processing alien-commands~n", []),
@@ -126,21 +97,49 @@ calculate_pre_dirs({Dir, _Handler}, {Command, Acc}) ->
 %% Internal Functions
 %%
 
+load_conf(Conf, Command, Config) ->
+    Cwd = rebar_utils:get_cwd(),
+    BaseDir = rebar_config:get_global(base_dir, undefined),
+    ActualRoot = (Cwd -- (BaseDir ++ "/")),
+    case rebar_config:get_global({ActualRoot, Command}, undefined) of
+        undefined ->
+            rebar_config:get(Config, Conf, []);
+        done ->
+            []
+    end.
+
+calculate_pre_dirs({{_Dir, explicit}, undefined}, Acc) ->
+    Acc;
+calculate_pre_dirs({{Dir, explicit}, Handler}, {Command, Acc}=AccIn) ->
+    case erlang:function_exported(Handler, Command, 2) of
+        true ->
+            case get({Dir, Command}) of
+                undefined ->
+                    {Command, [Dir|Acc]};
+                done ->
+                    AccIn
+            end;
+        false ->
+            AccIn
+    end;
+calculate_pre_dirs({Dir, _Handler}, {Command, Acc}) ->
+    {Command, [Dir|Acc]}.
+
 execute_command(Root, Config, _AppFile) ->
+    Command = rebar_utils:command_info(current),
     BaseDir = rebar_config:get_global(base_dir, undefined),
     Cwd = rebar_utils:get_cwd(),
     case (Cwd -- (BaseDir ++ "/")) of
         [] ->
-            ?DEBUG("Ignoring non-alien dir ~s~n", [Cwd]);
+            ?DEBUG("Ignoring non-alien dir ~s for ~p~n", [Cwd, Command]);
         ActualRoot ->
-            Command = rebar_utils:command_info(current),
             case load_conf(alien_conf, Command, Config) of
                 [] ->
                     ok;
                 AlienConf ->
-                    ?DEBUG("Processing alien source ~s (actual ~s)~n", 
+                    ?DEBUG("Processing alien source ~s (actual ~s)~n",
                             [Root, ActualRoot]),
-                    ?DEBUG("alien config = ~p~n", [AlienConf]),
+                    % ?DEBUG("alien config = ~p~n", [AlienConf]),
                     RuleBase = proplists:get_value(ActualRoot, AlienConf, []),
                     case lists:keyfind(Command, 2, RuleBase) of
                         {command, _, _, Rules} ->
@@ -177,7 +176,7 @@ cleanup(Config, Clean) ->
         AlienDirs ->
             Conf = rebar_config:get_local(Config, alien_conf, []),
             ?DEBUG("Checking Alien Dirs ~p for OTP app file(s)~n", [AlienDirs]),
-            DirClean = 
+            DirClean =
             fun(Dir) ->
                 case rebar_app_utils:is_app_dir(Dir) of
                     {true, Existing} ->
@@ -221,14 +220,6 @@ get_app_description(Existing) ->
         Other ->
             {error, Other}
     end.
-
-%process(AlienDirs, AppFile, RebarConfig) ->
-%    PendingDirs = [ Spec || Spec <- AlienDirs, get(Spec) =:= undefined ],
-%    ?DEBUG("PendingDirs: ~p~n", [PendingDirs]),
-%    Processed = process_config(PendingDirs, AppFile, RebarConfig),
-%    [ put(Spec, Handler) || {{_, explicit}=Spec, Handler} <- Processed ],
-%    PreExisting = AlienDirs -- PendingDirs,
-%    Processed ++ [ {Spec, get(Spec)} || Spec <- PreExisting ].
 
 process(AlienDirs, AppFile, RebarConfig) ->
     Conf = rebar_config:get_local(RebarConfig, alien_conf, []),
@@ -300,40 +291,49 @@ apply_config(Dir, InstructionSet) when is_list(InstructionSet) ->
 maybe_generate_handler(_, []) ->
     undefined;
 maybe_generate_handler(Base, Cmds) ->
-    Exports = [ {C, 2} || {command, C, _, _} <- Cmds ],
-    Functions = [ gen_function(Base, C) || {command, C, _, _} <- Cmds ],
-    {Forms, Loader} = case code:get_object_code(rebar_alien_plugin) of
-        {_,Bin,_} ->
-            ?DEBUG("Compiling from existing binary~n", []),
-            {to_forms(atom_to_list(?MODULE), Exports, Functions, Bin),
-                fun load_binary/2};
-        error ->
-            File = code:which(?MODULE),
-            case compile:file(File, [debug_info, binary, return_errors]) of
-                {ok, _, Bin} ->
-                    ?DEBUG("Compiling from binary~n", []),
-                    {to_forms(atom_to_list(?MODULE), Exports,
-                              Functions, Bin), fun load_binary/2};
-                Error ->
-                    ?WARN("Unable to recompile ~p: ~p~n",
-                          [?MODULE, Error]),
-                    {mod_from_scratch(Base, Exports,
-                                      Functions), fun evil_load_binary/2}
-            end;
-        _ ->
-            ?WARN("Cannot modify ~p - generating new module~n", [?MODULE]),
-            {mod_from_scratch(Base, Exports, Functions), fun evil_load_binary/2}
-    end,
-    Loaded = case compile:forms(Forms, [report, return]) of
-        {ok, ModName, Binary} ->
-            Loader(ModName, Binary);
-        {ok, ModName, Binary, _Warnings} ->
-            Loader(ModName, Binary);
-        CompileError ->
-            ?ABORT("Unable to compile: ~p~n", [CompileError])
-    end,
-    ?DEBUG("~p~n", [Loaded:module_info()]),
-    Loaded.
+    case rebar_config:get_global({Base, alien_mod}, undefined) of
+        undefined ->
+            ?DEBUG("Generating alien command handler(s) for ~p~n", [Base]),
+            Exports = [ {C, 2} || {command, C, _, _} <- Cmds ],
+            Functions = [ gen_function(Base, C) || {command, C, _, _} <- Cmds ],
+            {Forms, Loader} = case code:get_object_code(rebar_alien_plugin) of
+                {_,Bin,_} ->
+                    ?DEBUG("Compiling from existing binary~n", []),
+                    {to_forms(atom_to_list(?MODULE), Exports, Functions, Bin),
+                        fun load_binary/2};
+                error ->
+                    File = code:which(?MODULE),
+                    case compile:file(File, [debug_info,
+                                             binary, return_errors]) of
+                        {ok, _, Bin} ->
+                            ?DEBUG("Compiling from binary~n", []),
+                            {to_forms(atom_to_list(?MODULE), Exports,
+                                      Functions, Bin), fun load_binary/2};
+                        Error ->
+                            ?WARN("Unable to recompile ~p: ~p~n",
+                                  [?MODULE, Error]),
+                            {mod_from_scratch(Base, Exports, Functions),
+                                                        fun evil_load_binary/2}
+                    end;
+                _ ->
+                    ?WARN("Cannot modify ~p - generating new module~n",
+                          [?MODULE]),
+                    {mod_from_scratch(Base, Exports, Functions),
+                                                        fun evil_load_binary/2}
+            end,
+            Loaded = case compile:forms(Forms, [report, return]) of
+                {ok, ModName, Binary} ->
+                    Loader(ModName, Binary);
+                {ok, ModName, Binary, _Warnings} ->
+                    Loader(ModName, Binary);
+                CompileError ->
+                    ?ABORT("Unable to compile: ~p~n", [CompileError])
+            end,
+            rebar_config:set_global({Base, alien_mod}, Loaded),
+            Loaded;
+        Handler ->
+            Handler
+    end.
 
 mod_from_scratch(Base, Exports, Functions) ->
     [{attribute, ?LINE, module, list_to_atom(Base ++
