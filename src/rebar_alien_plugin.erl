@@ -57,14 +57,14 @@ preprocess(Config, AppFile) ->
                         [] ->
                             {ok, []};
                         AlienDirs ->
-                            ?DEBUG("Pre-processing ~p for Alien Dirs ~p~n", 
+                            ?DEBUG("Pre-processing ~p for Alien Dirs ~p~n",
                                     [Command, AlienDirs]),
                             Cwd = rebar_utils:get_cwd(),
                             AlienSpecs = process(AlienDirs, AppFile, Config),
                             {Command, Extras} =
                                 lists:foldl(fun calculate_pre_dirs/2,
                                             {Command, []}, AlienSpecs),
-                            ?DEBUG("Command: ~p, Extras: ~p~n", 
+                            ?DEBUG("Command: ~p, Extras: ~p~n",
                                     [Command, Extras]),
                             {ok, [ filename:join(Cwd, D) || D <- Extras ]}
                     end
@@ -74,18 +74,21 @@ preprocess(Config, AppFile) ->
 
 'alien-commands'(Config, _) ->
     ?DEBUG("Processing alien-commands~n", []),
-    Dir = filename:basename(rebar_utils:get_cwd()),
-    io:format("Global Alien Commands:~n"),
-    show_command_info({Dir,
-        [{command, 'alien-commands', "list Alien commands", []},
-         {command, 'alien-clean', "clean Alien artefacts", []}]}),
-    io:format("Commands for Alien Directory ~s:~n", [Dir]),
-    case rebar_config:get(Config, alien_conf, []) of
-        [] -> ok;
-        CmdSet ->
-            [ show_command_info(C) || C <- CmdSet ]
-    end,
-    halt(0).
+    case is_basedir() of
+        true ->
+            io:format("Global Alien Commands:~n"),
+            show_command_info({filename:basename(rebar_utils:get_cwd()),
+                [{command, 'alien-commands', "list Alien commands", []},
+                 {command, 'alien-clean', "clean Alien artefacts", []}]}),
+            case rebar_config:get(Config, alien_dirs, []) of
+                [] -> ok;
+                DirSet ->
+                    [ alien_commands(Dir, Config) || Dir <- DirSet ],
+                    ok
+            end;
+        false ->
+            ok
+    end.
 
 'alien-clean'(Config, _AppFile) ->
     Clean = fun(Dir, Item) ->
@@ -99,6 +102,26 @@ preprocess(Config, AppFile) ->
 %%
 %% Internal Functions
 %%
+
+alien_commands({Dir, explicit}, Config) ->
+    alien_commands(Dir, Config);
+alien_commands(Dir, Config) ->
+    Conf = rebar_config:get_local(Config, alien_conf, []),
+    io:format("Commands for Alien Directory ~s:~n", [Dir]),
+    case lists:keyfind(Dir, 1, Conf) of
+        false ->
+            ok;
+        CmdSet ->
+            show_command_info(CmdSet)
+    end.
+
+is_basedir() ->
+    rebar_utils:get_cwd() == rebar_config:get_global(base_dir, undefined).
+
+only_dirs(DirSet) ->
+    lists:map(fun({Dir, explicit}) -> Dir;
+                 (Dir) -> Dir
+              end, DirSet).
 
 load_conf(Conf, Command, Config) ->
     Cwd = rebar_utils:get_cwd(),
@@ -165,6 +188,7 @@ show_command_info(_) ->
     ok.
 
 show_command(Name, Desc) ->
+    %% TODO: use a proper format string here...
     Spacer = lists:concat(lists:duplicate(28 - length(atom_to_list(Name)), " ")),
     io:format("* ~s~s~s~n", [Name, Spacer, Desc]).
 
