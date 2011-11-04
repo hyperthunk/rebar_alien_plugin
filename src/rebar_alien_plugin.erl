@@ -118,10 +118,10 @@ alien_commands(Dir, Config) ->
 is_basedir() ->
     rebar_utils:get_cwd() == rebar_config:get_global(base_dir, undefined).
 
-only_dirs(DirSet) ->
-    lists:map(fun({Dir, explicit}) -> Dir;
-                 (Dir) -> Dir
-              end, DirSet).
+%only_dirs(DirSet) ->
+%    lists:map(fun({Dir, explicit}) -> Dir;
+%                 (Dir) -> Dir
+%              end, DirSet).
 
 load_conf(Conf, Command, Config) ->
     Cwd = rebar_utils:get_cwd(),
