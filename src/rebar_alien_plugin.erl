@@ -35,7 +35,7 @@
 %% special rebar hooks
 -export(['alien-commands'/2, 'alien-clean'/2]).
 
-%% rebar_cmd_builder api hooks
+%% rebar_plugin_manager api hooks
 -export([execute_command/4]).
 
 %%
@@ -334,7 +334,7 @@ apply_config(Dir, InstructionSet) when is_list(InstructionSet) ->
 maybe_generate_handler(_, []) ->
     undefined;
 maybe_generate_handler(Base, Cmds) ->
-    rebar_cmd_builder:generate_handler(Base, Cmds, ?MODULE).
+    rebar_plugin_manager:generate_handler(Base, Cmds, ?MODULE).
 
 alien_conf_clean(Dir, Conf) ->
     ?DEBUG("Cleaning '~p' ...~n", [Conf]),
