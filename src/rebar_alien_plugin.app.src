@@ -1,7 +1,7 @@
 {application, rebar_alien_plugin,
  [
   {description, ""},
-  {vsn, "0.0.2"},
+  {vsn, {cmd, "git describe --abbrev=0"}},
   {applications, [
                   kernel,
                   stdlib
